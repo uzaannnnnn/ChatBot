@@ -49,8 +49,8 @@ func TestLoadFromLookup_ValidConfiguration(t *testing.T) {
 	if cfg.FrontendOrigin != "https://app.example.com" {
 		t.Errorf("expected FrontendOrigin %q, got %q", "https://app.example.com", cfg.FrontendOrigin)
 	}
-	if cfg.Address() != ":9090" {
-		t.Errorf("expected Address %q, got %q", ":9090", cfg.Address())
+	if cfg.Address() != "0.0.0.0:9090" {
+		t.Errorf("expected Address %q, got %q", "0.0.0.0:9090", cfg.Address())
 	}
 	if cfg.HFToken != "hf_topsecret_token_12345" {
 		t.Errorf("expected HFToken %q, got %q", "hf_topsecret_token_12345", cfg.HFToken)
@@ -378,6 +378,78 @@ func TestLoadFromLookup_GeminiAndProviderSelection(t *testing.T) {
 		_, err := LoadFromLookup(mapLookup(env))
 		if !errors.Is(err, ErrInvalidAIProvider) {
 			t.Errorf("expected ErrInvalidAIProvider, got %v", err)
+		}
+	})
+}
+
+func TestLoadFromLookup_PortPrecedence(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PORT takes precedence over APP_PORT", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{
+			"DATABASE_URL": "postgres://user:pass@localhost:5432/db",
+			"PORT":         "10000",
+			"APP_PORT":     "9090",
+		}
+		cfg, err := LoadFromLookup(mapLookup(env))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.AppPort != 10000 {
+			t.Errorf("expected AppPort 10000, got %d", cfg.AppPort)
+		}
+		if cfg.Address() != "0.0.0.0:10000" {
+			t.Errorf("expected Address %q, got %q", "0.0.0.0:10000", cfg.Address())
+		}
+	})
+
+	t.Run("falls back to APP_PORT when PORT is empty", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{
+			"DATABASE_URL": "postgres://user:pass@localhost:5432/db",
+			"PORT":         "   ",
+			"APP_PORT":     "9091",
+		}
+		cfg, err := LoadFromLookup(mapLookup(env))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.AppPort != 9091 {
+			t.Errorf("expected AppPort 9091, got %d", cfg.AppPort)
+		}
+		if cfg.Address() != "0.0.0.0:9091" {
+			t.Errorf("expected Address %q, got %q", "0.0.0.0:9091", cfg.Address())
+		}
+	})
+
+	t.Run("defaults to 8080 when neither PORT nor APP_PORT is set", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{
+			"DATABASE_URL": "postgres://user:pass@localhost:5432/db",
+		}
+		cfg, err := LoadFromLookup(mapLookup(env))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.AppPort != DefaultAppPort {
+			t.Errorf("expected AppPort %d, got %d", DefaultAppPort, cfg.AppPort)
+		}
+		if cfg.Address() != "0.0.0.0:8080" {
+			t.Errorf("expected Address %q, got %q", "0.0.0.0:8080", cfg.Address())
+		}
+	})
+
+	t.Run("invalid PORT fails even if APP_PORT is valid", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{
+			"DATABASE_URL": "postgres://user:pass@localhost:5432/db",
+			"PORT":         "invalid",
+			"APP_PORT":     "8080",
+		}
+		_, err := LoadFromLookup(mapLookup(env))
+		if !errors.Is(err, ErrInvalidAppPort) {
+			t.Fatalf("expected ErrInvalidAppPort, got %v", err)
 		}
 	})
 }

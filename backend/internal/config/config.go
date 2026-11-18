@@ -126,7 +126,10 @@ func LoadFromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		AISystemPrompt:       getString(lookup, "AI_SYSTEM_PROMPT", DefaultAISystemPrompt),
 	}
 
-	portStr := getString(lookup, "APP_PORT", strconv.Itoa(DefaultAppPort))
+	portStr := getString(lookup, "PORT", "")
+	if portStr == "" {
+		portStr = getString(lookup, "APP_PORT", strconv.Itoa(DefaultAppPort))
+	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
 		return nil, ErrInvalidAppPort
@@ -258,7 +261,7 @@ func LoadFromLookup(lookup func(string) (string, bool)) (*Config, error) {
 
 // Address returns the host:port listen address for the HTTP server.
 func (c *Config) Address() string {
-	return fmt.Sprintf(":%d", c.AppPort)
+	return fmt.Sprintf("0.0.0.0:%d", c.AppPort)
 }
 
 // String returns a redacted representation of Config safe for logging.
