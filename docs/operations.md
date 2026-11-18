@@ -63,6 +63,12 @@ go run ./cmd/migrate down 1
    - `FRONTEND_ORIGIN` (production frontend HTTPS origin)
    - `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL_ID=gemini-3.1-flash-lite`
 3. Deploy **Frontend** (`frontend/Dockerfile`) with build args:
-   - `VITE_API_BASE_URL` (production backend HTTPS URL)
+   - `VITE_API_BASE_URL` (production backend HTTPS URL, e.g. `https://chatbot-server-dskr.onrender.com`)
+   - `VITE_SITE_URL` (optional explicit production frontend HTTPS origin `https://doubleu-ai.eshace.com`; defaults to `window.location.origin`)
    - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
-4. Verify `GET /health`, `GET /ready`, login flow, and SSE streaming in production.
+4. Configure **Supabase Dashboard → Authentication → URL Configuration**:
+   - **Site URL**: `https://doubleu-ai.eshace.com`
+   - **Redirect URLs**:
+     - `https://doubleu-ai.eshace.com/**`
+     - Development only (local testing): `http://localhost:5173/**` (never set localhost as the production Site URL)
+5. Verify `GET /health`, `GET /ready`, registration email confirmation redirect, login flow, and SSE streaming in production.

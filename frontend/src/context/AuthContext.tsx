@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import { setAuthHooks } from '@/api/client'
 import { AuthContext, type AuthUser } from '@/context/auth-context'
+import {
+  cleanAuthCallbackUrl,
+  getEmailRedirectTo,
+  hasAuthCallbackParams,
+  parseAuthCallbackError,
+} from '@/lib/authRedirect'
 import { supabase } from '@/lib/supabase'
 
 interface AuthProviderProps {
@@ -23,6 +30,21 @@ export function AuthProvider({
   useEffect(() => {
     tokenRef.current = accessToken
   }, [accessToken])
+
+  const applySession = useCallback((session: Session) => {
+    if (tokenRef.current === session.access_token) {
+      return
+    }
+    tokenRef.current = session.access_token
+    setAccessToken(session.access_token)
+    setUser({ id: session.user.id, email: session.user.email })
+  }, [])
+
+  const clearSessionState = useCallback(() => {
+    tokenRef.current = null
+    setAccessToken(null)
+    setUser(null)
+  }, [])
 
   const clearError = useCallback(() => setError(null), [])
 
@@ -72,32 +94,48 @@ export function AuthProvider({
     }
 
     let mounted = true
+    const callbackError =
+      typeof window !== 'undefined' ? parseAuthCallbackError(window.location) : null
+
     supabase.auth
       .getSession()
       .then(({ data, error: sessErr }) => {
         if (!mounted) return
         if (sessErr) {
-          setError(sessErr.message)
+          setError(callbackError ?? sessErr.message)
         } else if (data.session) {
-          tokenRef.current = data.session.access_token
-          setAccessToken(data.session.access_token)
-          setUser({ id: data.session.user.id, email: data.session.user.email })
+          applySession(data.session)
+          setError(null)
+        } else if (callbackError) {
+          setError(callbackError)
+        }
+
+        if (
+          typeof window !== 'undefined' &&
+          (hasAuthCallbackParams(window.location) || window.location.href.endsWith('#'))
+        ) {
+          cleanAuthCallbackUrl()
         }
       })
       .finally(() => {
         if (mounted) setIsLoading(false)
       })
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return
       if (session) {
-        tokenRef.current = session.access_token
-        setAccessToken(session.access_token)
-        setUser({ id: session.user.id, email: session.user.email })
+        applySession(session)
+        if (event === 'SIGNED_IN') {
+          setError(null)
+        }
+        if (
+          typeof window !== 'undefined' &&
+          (hasAuthCallbackParams(window.location) || window.location.href.endsWith('#'))
+        ) {
+          cleanAuthCallbackUrl()
+        }
       } else {
-        tokenRef.current = null
-        setAccessToken(null)
-        setUser(null)
+        clearSessionState()
       }
     })
 
@@ -105,7 +143,7 @@ export function AuthProvider({
       mounted = false
       sub.subscription.unsubscribe()
     }
-  }, [initialUser])
+  }, [applySession, clearSessionState, initialUser])
 
   const signIn = useCallback(async (email: string, password: string) => {
     setError(null)
@@ -135,7 +173,12 @@ export function AuthProvider({
       setError(msg)
       return null
     }
-    const { data, error: authErr } = await supabase.auth.signUp({ email, password })
+    const emailRedirectTo = getEmailRedirectTo()
+    const { data, error: authErr } = await supabase.auth.signUp({
+      email,
+      password,
+      ...(emailRedirectTo ? { options: { emailRedirectTo } } : {}),
+    })
     if (authErr) {
       setError(authErr.message)
       throw authErr
