@@ -1,0 +1,44 @@
+# Manual deployment template: builds release container artifacts without pushing
+# or deploying to any live cloud provider until registry/provider steps are configured.
+name: Deploy (Manual Trigger)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target deployment environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  build-and-publish:
+    name: Build & Verify Release Artifacts
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend production image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          tags: chatbot-backend:${{ github.sha }}
+
+      - name: Build frontend production image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          build-args: |
+            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}
+            VITE_SUPABASE_URL=${{ vars.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ vars.VITE_SUPABASE_ANON_KEY }}
+          tags: chatbot-frontend:${{ github.sha }}

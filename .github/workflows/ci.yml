@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend Go Quality Gates
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chatbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d chatbot_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Check gofmt
+        working-directory: backend
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Go vet
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Go unit tests
+        working-directory: backend
+        run: go test -count=1 ./...
+
+      - name: Go race detector tests
+        working-directory: backend
+        run: go test -race -count=1 ./...
+
+      - name: PostgreSQL integration tests
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chatbot_test?sslmode=disable
+        run: go test -tags=integration -race -count=1 -v ./internal/repository/postgres/
+
+  frontend:
+    name: Frontend Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Prettier format check
+        working-directory: frontend
+        run: npm run format:check
+
+      - name: Oxlint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Vitest unit and integration tests
+        working-directory: frontend
+        run: npm test
+
+      - name: TypeScript check and Vite production build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      - name: Playwright E2E tests
+        working-directory: frontend
+        run: npm run test:e2e
+
+  docker:
+    name: Docker Build Validation
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production Docker images
+        run: docker compose build
