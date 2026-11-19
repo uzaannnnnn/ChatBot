@@ -34,7 +34,16 @@ const (
 	DefaultAITemperature     = 0.7
 	DefaultAITimeout         = 60 * time.Second
 	DefaultAIMaxContextMsgs  = 20
-	DefaultAISystemPrompt    = "You are a helpful, respectful, and honest AI assistant."
+	DefaultAISystemPrompt    = "You are DOUBLEU AI, a helpful, thoughtful, and honest general-purpose AI assistant. When the user asks you to generate, draw, or create an image, invoke the generate_image tool rather than outputting raw JSON."
+
+	// Cloudflare Workers AI (image generation)
+	DefaultCloudflareBaseURL    = "https://api.cloudflare.com/client/v4"
+	DefaultCloudflareImageModel = "@cf/black-forest-labs/flux-1-schnell"
+	DefaultImageGenTimeout      = 45 * time.Second
+
+	// Supabase Storage (private attachment bucket)
+	DefaultSupabaseStorageBucket = "chat-attachments"
+	DefaultSignedURLTTL          = 15 * time.Minute
 )
 
 var (
@@ -62,10 +71,20 @@ type Config struct {
 	ReadinessTimeout    time.Duration
 	MaxRequestBodyBytes int64
 
-	// Supabase Auth configuration
-	SupabaseURL       string
-	SupabaseJWKSURL   string
-	SupabaseJWTSecret string
+	// Supabase Auth & Storage configuration
+	SupabaseURL            string
+	SupabaseJWKSURL        string
+	SupabaseJWTSecret      string
+	SupabaseServiceRoleKey string
+	SupabaseStorageBucket  string
+	SignedURLTTL           time.Duration
+
+	// Cloudflare Workers AI Image Generation configuration (backend-only)
+	CloudflareAccountID  string
+	CloudflareAPIToken   string
+	CloudflareBaseURL    string
+	CloudflareImageModel string
+	ImageGenTimeout      time.Duration
 
 	// AI Provider configuration
 	AIProvider    string
@@ -105,25 +124,30 @@ func Load(envPaths ...string) (*Config, error) {
 // This allows deterministic unit tests without mutating global process state.
 func LoadFromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	cfg := &Config{
-		AppEnv:               getString(lookup, "APP_ENV", DefaultAppEnv),
-		FrontendOrigin:       getString(lookup, "FRONTEND_ORIGIN", DefaultFrontendOrigin),
-		DBMaxConns:           DefaultDBMaxConns,
-		DBMinConns:           DefaultDBMinConns,
-		DBMaxConnLifetime:    DefaultDBMaxConnLifetime,
-		DBMaxConnIdleTime:    DefaultDBMaxConnIdleTime,
-		DBConnectTimeout:     DefaultDBConnectTimeout,
-		ShutdownTimeout:      DefaultShutdownTimeout,
-		ReadinessTimeout:     DefaultReadinessTimeout,
-		MaxRequestBodyBytes:  DefaultMaxRequestBodyBytes,
-		HFToken:              getString(lookup, "HF_TOKEN", ""),
-		HFModelID:            getString(lookup, "HF_MODEL_ID", DefaultHFModelID),
-		HFBaseURL:            getString(lookup, "HF_BASE_URL", DefaultHFBaseURL),
-		HFProvider:           getString(lookup, "HF_PROVIDER", ""),
-		AIMaxOutputTokens:    DefaultAIMaxOutputTokens,
-		AITemperature:        DefaultAITemperature,
-		AITimeout:            DefaultAITimeout,
-		AIMaxContextMessages: DefaultAIMaxContextMsgs,
-		AISystemPrompt:       getString(lookup, "AI_SYSTEM_PROMPT", DefaultAISystemPrompt),
+		AppEnv:                getString(lookup, "APP_ENV", DefaultAppEnv),
+		FrontendOrigin:        getString(lookup, "FRONTEND_ORIGIN", DefaultFrontendOrigin),
+		DBMaxConns:            DefaultDBMaxConns,
+		DBMinConns:            DefaultDBMinConns,
+		DBMaxConnLifetime:     DefaultDBMaxConnLifetime,
+		DBMaxConnIdleTime:     DefaultDBMaxConnIdleTime,
+		DBConnectTimeout:      DefaultDBConnectTimeout,
+		ShutdownTimeout:       DefaultShutdownTimeout,
+		ReadinessTimeout:      DefaultReadinessTimeout,
+		MaxRequestBodyBytes:   DefaultMaxRequestBodyBytes,
+		HFToken:               getString(lookup, "HF_TOKEN", ""),
+		HFModelID:             getString(lookup, "HF_MODEL_ID", DefaultHFModelID),
+		HFBaseURL:             getString(lookup, "HF_BASE_URL", DefaultHFBaseURL),
+		HFProvider:            getString(lookup, "HF_PROVIDER", ""),
+		AIMaxOutputTokens:     DefaultAIMaxOutputTokens,
+		AITemperature:         DefaultAITemperature,
+		AITimeout:             DefaultAITimeout,
+		AIMaxContextMessages:  DefaultAIMaxContextMsgs,
+		AISystemPrompt:        getString(lookup, "AI_SYSTEM_PROMPT", DefaultAISystemPrompt),
+		SupabaseStorageBucket: getString(lookup, "SUPABASE_STORAGE_BUCKET", DefaultSupabaseStorageBucket),
+		SignedURLTTL:          DefaultSignedURLTTL,
+		CloudflareBaseURL:     getString(lookup, "CLOUDFLARE_BASE_URL", DefaultCloudflareBaseURL),
+		CloudflareImageModel:  getString(lookup, "CLOUDFLARE_IMAGE_MODEL", DefaultCloudflareImageModel),
+		ImageGenTimeout:       DefaultImageGenTimeout,
 	}
 
 	portStr := getString(lookup, "PORT", "")
@@ -196,6 +220,28 @@ func LoadFromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		}
 	}
 	cfg.SupabaseJWTSecret = getString(lookup, "SUPABASE_JWT_SECRET", "")
+	cfg.SupabaseServiceRoleKey = getString(lookup, "SUPABASE_SERVICE_ROLE_KEY", "")
+
+	if v, ok := lookup("SIGNED_URL_TTL"); ok && strings.TrimSpace(v) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(v))
+		if err != nil || d < time.Minute || d > 24*time.Hour {
+			return nil, fmt.Errorf("config: SIGNED_URL_TTL must be between 1m and 24h")
+		}
+		cfg.SignedURLTTL = d
+	}
+
+	cfg.CloudflareAccountID = getString(lookup, "CLOUDFLARE_ACCOUNT_ID", "")
+	cfg.CloudflareAPIToken = getString(lookup, "CLOUDFLARE_API_TOKEN", "")
+	if err := validateURL(cfg.CloudflareBaseURL); err != nil {
+		return nil, fmt.Errorf("config: CLOUDFLARE_BASE_URL must be a valid http or https URL")
+	}
+	if v, ok := lookup("IMAGE_GEN_TIMEOUT"); ok && strings.TrimSpace(v) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(v))
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("config: IMAGE_GEN_TIMEOUT must be a positive duration")
+		}
+		cfg.ImageGenTimeout = d
+	}
 
 	if v, ok := lookup("AI_MAX_OUTPUT_TOKENS"); ok && strings.TrimSpace(v) != "" {
 		parsed, err := strconv.Atoi(strings.TrimSpace(v))
@@ -278,16 +324,33 @@ func (c Config) String() string {
 	if c.SupabaseJWTSecret != "" {
 		jwtSecretRedacted = "[REDACTED]"
 	}
+	serviceRoleRedacted := "[UNSET]"
+	if c.SupabaseServiceRoleKey != "" {
+		serviceRoleRedacted = "[REDACTED]"
+	}
+	cfAccountRedacted := "[UNSET]"
+	if c.CloudflareAccountID != "" {
+		cfAccountRedacted = "[REDACTED]"
+	}
+	cfTokenRedacted := "[UNSET]"
+	if c.CloudflareAPIToken != "" {
+		cfTokenRedacted = "[REDACTED]"
+	}
 	return fmt.Sprintf(
-		"Config{AppEnv:%q, AppPort:%d, FrontendOrigin:%q, DatabaseURL:\"[REDACTED]\", SupabaseURL:%q, SupabaseJWTSecret:%q, AIProvider:%q, GeminiModelID:%q, GeminiAPIKey:%q, HFModelID:%q, HFBaseURL:%q, HFToken:%q}",
+		"Config{AppEnv:%q, AppPort:%d, FrontendOrigin:%q, DatabaseURL:\"[REDACTED]\", SupabaseURL:%q, SupabaseJWTSecret:%q, SupabaseServiceRoleKey:%q, SupabaseStorageBucket:%q, AIProvider:%q, GeminiModelID:%q, GeminiAPIKey:%q, CloudflareAccountID:%q, CloudflareAPIToken:%q, CloudflareImageModel:%q, HFModelID:%q, HFBaseURL:%q, HFToken:%q}",
 		c.AppEnv,
 		c.AppPort,
 		c.FrontendOrigin,
 		c.SupabaseURL,
 		jwtSecretRedacted,
+		serviceRoleRedacted,
+		c.SupabaseStorageBucket,
 		c.AIProvider,
 		c.GeminiModelID,
 		geminiKeyRedacted,
+		cfAccountRedacted,
+		cfTokenRedacted,
+		c.CloudflareImageModel,
 		c.HFModelID,
 		c.HFBaseURL,
 		hfTokenRedacted,

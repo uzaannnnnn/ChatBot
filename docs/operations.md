@@ -72,3 +72,25 @@ go run ./cmd/migrate down 1
      - `https://doubleu-ai.eshace.com/**`
      - Development only (local testing): `http://localhost:5173/**` (never set localhost as the production Site URL)
 5. Verify `GET /health`, `GET /ready`, registration email confirmation redirect, login flow, and SSE streaming in production.
+
+
+---
+
+## DOUBLEU AI v2.0 Deployment & Operations
+
+### Required Setup for Native Image Generation
+
+1. **Run Migration `000003`**:
+   ```bash
+   cd backend && go run ./cmd/migrate up
+   ```
+2. **Create Private Supabase Storage Bucket**:
+   - In Supabase Dashboard -> Storage, create a **Private** bucket named `chat-attachments` (or match `SUPABASE_STORAGE_BUCKET`).
+   - Do **not** make the bucket public; the backend uploads via `SUPABASE_SERVICE_ROLE_KEY` and issues short-lived signed URLs (`SIGNED_URL_TTL`, default `15m`) only after verifying conversation ownership.
+3. **Configure Backend-Only Environment Variables** (Render / Docker / production host — never expose to Vite):
+   - `CLOUDFLARE_ACCOUNT_ID`
+   - `CLOUDFLARE_API_TOKEN` (scoped with Workers AI permission)
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - Optional overrides: `CLOUDFLARE_IMAGE_MODEL` (`@cf/black-forest-labs/flux-1-schnell`), `IMAGE_GEN_TIMEOUT` (`45s`), `SUPABASE_STORAGE_BUCKET` (`chat-attachments`), `SIGNED_URL_TTL` (`15m`).
+4. **Graceful Degradation**: If Cloudflare or Supabase Storage variables are unset, text chat continues working normally and the `generate_image` tool stays disabled.
+5. **Quota Note**: Cloudflare Workers AI free allocation is shared across Workers AI usage; monitor 429 responses and adjust `DefaultImageRateLimit` if needed.

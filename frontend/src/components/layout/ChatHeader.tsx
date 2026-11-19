@@ -26,7 +26,7 @@ export function ChatHeader({ onOpenMobileSidebar }: ChatHeaderProps) {
           <Menu className="h-5 w-5" aria-hidden="true" />
         </Button>
         <h1 className="truncate text-sm font-semibold text-foreground sm:text-base">
-          {activeConversation ? activeConversation.title : 'New chat'}
+          {activeConversation ? activeConversation.title : 'DOUBLEU AI'}
         </h1>
       </div>
 

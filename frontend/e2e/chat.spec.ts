@@ -238,9 +238,9 @@ test('full chat lifecycle: create, stream, refresh, reopen, rename, delete + scr
   // 9. Delete conversation
   await page.getByRole('button', { name: /delete go channels guide/i }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'New chat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'DOUBLEU AI', level: 1 })).toBeVisible()
 
   // 10. Sign out
   await page.getByRole('button', { name: 'Sign out' }).click()
-  await expect(page.getByRole('heading', { name: /sign in to ai mini chatbot/i })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /sign in to doubleu ai/i })).toBeVisible()
 })

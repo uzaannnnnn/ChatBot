@@ -23,6 +23,7 @@ export function ChatContainer() {
         isLoading={isLoadingMessages}
         hasActiveConversation={activeConversationId !== null}
         onNewChat={() => void createConversation()}
+        onSelectPrompt={(prompt) => void sendMessage(prompt)}
       />
 
       {error && (

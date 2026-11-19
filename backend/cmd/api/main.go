@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/uzaannnnnn/ChatBot/backend/internal/ai"
+	"github.com/uzaannnnnn/ChatBot/backend/internal/ai/cloudflare"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/ai/gemini"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/ai/huggingface"
+	"github.com/uzaannnnnn/ChatBot/backend/internal/ai/tools"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/auth"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/config"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/database"
@@ -20,6 +22,7 @@ import (
 	"github.com/uzaannnnnn/ChatBot/backend/internal/httpserver"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/repository/postgres"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/service"
+	"github.com/uzaannnnnn/ChatBot/backend/internal/storage"
 )
 
 const (
@@ -78,8 +81,20 @@ func run(logger *slog.Logger) error {
 	conversationRepo := postgres.NewConversationRepository(pool)
 	messageRepo := postgres.NewMessageRepository(pool)
 
-	conversationSvc := service.NewConversationService(conversationRepo)
-	messageSvc := service.NewMessageService(messageRepo)
+	var objectStore storage.ObjectStorage
+	if cfg.SupabaseURL != "" && cfg.SupabaseServiceRoleKey != "" {
+		objectStore = storage.NewSupabaseClient(storage.SupabaseOptions{
+			SupabaseURL:    cfg.SupabaseURL,
+			ServiceRoleKey: cfg.SupabaseServiceRoleKey,
+			Bucket:         cfg.SupabaseStorageBucket,
+		})
+		logger.Info("supabase object storage initialized", "bucket", cfg.SupabaseStorageBucket)
+	} else {
+		logger.Warn("supabase object storage not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY empty); attachment uploads and signed URLs disabled")
+	}
+
+	conversationSvc := service.NewConversationService(conversationRepo).WithAttachmentCleanup(messageRepo, objectStore)
+	messageSvc := service.NewMessageService(messageRepo).WithStorage(objectStore, cfg.SignedURLTTL)
 
 	var aiProvider ai.Provider
 	var activeModelID string
@@ -114,6 +129,25 @@ func run(logger *slog.Logger) error {
 		logger.Warn("unknown ai provider configured", "provider", cfg.AIProvider)
 	}
 
+	toolRegistry := tools.NewRegistry(cfg.ImageGenTimeout)
+	if cfg.CloudflareAccountID != "" && cfg.CloudflareAPIToken != "" && objectStore != nil {
+		cfClient := cloudflare.NewClient(cloudflare.ClientOptions{
+			BaseURL:   cfg.CloudflareBaseURL,
+			AccountID: cfg.CloudflareAccountID,
+			APIToken:  cfg.CloudflareAPIToken,
+			Model:     cfg.CloudflareImageModel,
+			Timeout:   cfg.ImageGenTimeout,
+		})
+		toolRegistry.Register(tools.NewGenerateImageTool(tools.GenerateImageOptions{
+			Provider:     cfClient,
+			Storage:      objectStore,
+			SignedURLTTL: cfg.SignedURLTTL,
+		}))
+		logger.Info("cloudflare image generation tool registered", "tool", tools.ToolNameGenerateImage, "model", cfg.CloudflareImageModel)
+	} else {
+		logger.Info("image generation tool disabled (requires CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and SUPABASE_SERVICE_ROLE_KEY)")
+	}
+
 	chatSvc := service.NewChatService(conversationRepo, messageRepo, aiProvider, service.ChatServiceConfig{
 		ModelID:        activeModelID,
 		SystemPrompt:   cfg.AISystemPrompt,
@@ -121,7 +155,7 @@ func run(logger *slog.Logger) error {
 		Temperature:    cfg.AITemperature,
 		Timeout:        cfg.AITimeout,
 		MaxContextMsgs: cfg.AIMaxContextMessages,
-	})
+	}).WithToolRegistry(toolRegistry).WithAttachmentStore(messageRepo, objectStore)
 
 	var authVerifier auth.Verifier
 	if cfg.SupabaseURL != "" || cfg.SupabaseJWKSURL != "" || cfg.SupabaseJWTSecret != "" {

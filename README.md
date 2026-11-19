@@ -1,20 +1,23 @@
-# AI Mini Chatbot
+# DOUBLEU AI
 
-Full-stack AI Assistant web application built with **React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui** and **Go + Gin + pgxpool + Supabase PostgreSQL + Google Gemini**.
+**Think More. Discover More.**
+
+General-purpose AI Assistant Platform built with **React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui** and **Go + Gin + pgxpool + Supabase PostgreSQL & Storage + Google Gemini + Cloudflare Workers AI (FLUX.1 schnell)**.
 
 ## Features
 
+- **Unified AI Assistant Workspace**: Polished DOUBLEU AI interface with starter prompts, Markdown + GFM rendering, syntax-formatted code blocks, and inline image previews.
+- **Native Image Generation (v2.0)**: Structured Gemini function calling (`generate_image`) orchestrated by a backend Tool Registry, powered by Cloudflare Workers AI (`@cf/black-forest-labs/flux-1-schnell`), stored in private Supabase Storage with short-lived signed URLs.
 - **Supabase Authentication**: Email/password sign-up, sign-in, sign-out, session persistence, and automatic session refresh.
-- **Multi-User Ownership Isolation**: Every conversation and message is scoped to its authenticated `owner_id`; unauthorized requests return `401` and cross-user access returns `404`.
-- **Real-Time SSE Streaming**: Incremental assistant responses via `fetch()` + `ReadableStream` Server-Sent Events with mid-stream cancellation and optimistic message ID reconciliation.
-- **Conversation Management**: Create, list, rename, and delete conversations from a responsive desktop/mobile sidebar.
-- **Rich Message Rendering**: Markdown + GitHub Flavored Markdown (`remark-gfm`) with formatted code blocks and copy support.
+- **Multi-User Ownership Isolation**: Every conversation, message, and attachment is scoped to its authenticated `owner_id`; unauthorized requests return `401` and cross-user access returns `404`.
+- **Additive Real-Time SSE Streaming**: Incremental assistant responses via `fetch()` + `ReadableStream` Server-Sent Events (`message_start`, `tool_status`, `attachment`, `content_delta`, `message_complete`, `error`).
+- **Conversation Management**: Create, list, rename, and delete conversations (with automatic storage object cleanup on deletion).
 
 ## Tech Stack & Architecture
 
 - **Frontend (`/frontend`)**: React 19, TypeScript, Vite 8, Tailwind CSS v4, shadcn/ui (Radix UI), `@supabase/supabase-js`, `react-markdown`, `remark-gfm`, Vitest + React Testing Library, Oxlint, Prettier, Playwright.
-- **Backend (`/backend`)**: Go 1.27 (`go 1.27.3`), Gin, `pgx/v5` (`pgxpool`), `golang-migrate`, JWKS-based Supabase JWT verification (`golang-jwt/v5`), token-bucket rate limiting (`golang.org/x/time/rate`), Google Gemini Interactions API (`gemini-3.1-flash-lite`) with an optional Hugging Face Inference adapter.
-- **Database**: Supabase PostgreSQL 17 (`chatbot` schema: `chatbot.conversations` and `chatbot.messages`).
+- **Backend (`/backend`)**: Go 1.27 (`go 1.27.3`), Gin, `pgx/v5` (`pgxpool`), `golang-migrate`, JWKS-based Supabase JWT verification (`golang-jwt/v5`), token-bucket rate limiting (`golang.org/x/time/rate`), Google Gemini Interactions API (`gemini-3.1-flash-lite`) with structured tool calling, Cloudflare Workers AI image provider (`@cf/black-forest-labs/flux-1-schnell`), and Supabase Storage REST client.
+- **Database & Storage**: Supabase PostgreSQL 17 (`chatbot.conversations`, `chatbot.messages`, `chatbot.message_attachments`) + private Supabase Storage bucket (`chat-attachments`).
 
 Further architecture and operational documentation lives in `/docs`:
 - [Architecture](docs/architecture.md)
@@ -24,6 +27,7 @@ Further architecture and operational documentation lives in `/docs`:
 - [Security & Auth](docs/security.md)
 - [Operations & Deployment](docs/operations.md)
 - [Gemini Model Benchmark](docs/model-benchmark.md)
+- [Changelog](CHANGELOG.md)
 
 ## Prerequisites
 
@@ -73,7 +77,15 @@ Do **not** commit real `.env` files. Only `.env.example` templates are tracked.
 | `DATABASE_URL` | Supabase PostgreSQL connection string (`sslmode=require`) | `postgresql://postgres.project_ref:your_password@aws-0-region.pooler.supabase.com:5432/postgres?sslmode=require` |
 | `SUPABASE_URL` | Supabase project URL for JWKS JWT verification | `https://your-project-ref.supabase.co` |
 | `SUPABASE_JWKS_URL` | Optional explicit JWKS URL override | `${SUPABASE_URL}/auth/v1/.well-known/jwks.json` |
-| `SUPABASE_JWT_SECRET` | Optional legacy HS256 secret (JWKS preferred) | *(optional)* |
+| `SUPABASE_JWTSecret` / `SUPABASE_JWT_SECRET` | Optional legacy HS256 secret (JWKS preferred) | *(optional)* |
+| `SUPABASE_SERVICE_ROLE_KEY` | Backend-only service role key for private Supabase Storage uploads & signed URLs | `your_supabase_service_role_key_here` |
+| `SUPABASE_STORAGE_BUCKET` | Private Supabase Storage bucket name for generated images | `chat-attachments` |
+| `SIGNED_URL_TTL` | Signed URL expiration duration (`1m` to `24h`) | `15m` |
+| `CLOUDFLARE_ACCOUNT_ID` | Backend-only Cloudflare account ID for Workers AI | `your_cloudflare_account_id_here` |
+| `CLOUDFLARE_API_TOKEN` | Backend-only Cloudflare API token with Workers AI Read/Run permission | `your_cloudflare_api_token_here` |
+| `CLOUDFLARE_BASE_URL` | Cloudflare API base URL | `https://api.cloudflare.com/client/v4` |
+| `CLOUDFLARE_IMAGE_MODEL` | Cloudflare Workers AI image model | `@cf/black-forest-labs/flux-1-schnell` |
+| `IMAGE_GEN_TIMEOUT` | Per-request timeout for image generation | `45s` |
 | `FRONTEND_ORIGIN` | Allowed CORS origin | `http://localhost:5173` |
 | `TEST_DATABASE_URL` | Optional PostgreSQL URL for `-tags=integration` tests | `postgresql://postgres:postgres@localhost:5432/chatbot_test?sslmode=disable` |
 | `AI_PROVIDER` | Active AI provider (`gemini` \| `huggingface`) | `gemini` |

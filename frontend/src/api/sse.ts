@@ -1,11 +1,13 @@
 import { API_BASE_URL, getAuthHeaders, parseApiError } from '@/api/client'
 import type {
   CreateMessageRequest,
+  SSEAttachmentPayload,
   SSEContentDeltaPayload,
   SSEErrorPayload,
   SSEEvent,
   SSEMessageCompletePayload,
   SSEMessageStartPayload,
+  SSEToolStatusPayload,
 } from '@/types/chat'
 
 export class StreamProviderError extends Error {
@@ -77,6 +79,10 @@ export function parseSSEFrame(rawFrame: string): SSEEvent | null {
       return { event: 'message_start', data: parsed as SSEMessageStartPayload }
     case 'content_delta':
       return { event: 'content_delta', data: parsed as SSEContentDeltaPayload }
+    case 'tool_status':
+      return { event: 'tool_status', data: parsed as SSEToolStatusPayload }
+    case 'attachment':
+      return { event: 'attachment', data: parsed as SSEAttachmentPayload }
     case 'message_complete':
       return { event: 'message_complete', data: parsed as SSEMessageCompletePayload }
     case 'error':
@@ -157,6 +163,8 @@ export class SSEParser {
 export interface StreamMessageCallbacks {
   onStart?: (payload: SSEMessageStartPayload) => void
   onDelta?: (payload: SSEContentDeltaPayload) => void
+  onToolStatus?: (payload: SSEToolStatusPayload) => void
+  onAttachment?: (payload: SSEAttachmentPayload) => void
   onComplete?: (payload: SSEMessageCompletePayload) => void
   onError?: (payload: SSEErrorPayload) => void
 }
@@ -211,6 +219,12 @@ export async function streamMessage({
           break
         case 'content_delta':
           callbacks.onDelta?.(evt.data)
+          break
+        case 'tool_status':
+          callbacks.onToolStatus?.(evt.data)
+          break
+        case 'attachment':
+          callbacks.onAttachment?.(evt.data)
           break
         case 'message_complete':
           callbacks.onComplete?.(evt.data)

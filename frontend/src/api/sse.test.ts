@@ -155,4 +155,69 @@ describe('streamMessage', () => {
 
     fetchSpy.mockRestore()
   })
+
+  it('parses tool_status and attachment events and ignores unknown events safely', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: message_start\ndata: {"conversation_id":"c1","role":"assistant"}\n\n',
+          ),
+        )
+        controller.enqueue(
+          encoder.encode(
+            'event: tool_status\ndata: {"tool":"generate_image","status":"running"}\n\n',
+          ),
+        )
+        controller.enqueue(encoder.encode('event: future_unknown_event\ndata: {"foo":"bar"}\n\n'))
+        controller.enqueue(
+          encoder.encode(
+            'event: tool_status\ndata: {"tool":"generate_image","status":"completed"}\n\n',
+          ),
+        )
+        controller.enqueue(
+          encoder.encode(
+            'event: attachment\ndata: {"id":"att-1","kind":"image","url":"https://signed.example/img.jpg","mime_type":"image/jpeg","alt_text":"Neon city","width":1024,"height":1024}\n\n',
+          ),
+        )
+        controller.enqueue(
+          encoder.encode('event: content_delta\ndata: {"delta":"Here is your neon city."}\n\n'),
+        )
+        controller.enqueue(
+          encoder.encode(
+            'event: message_complete\ndata: {"status":"completed","message_id":"m-img"}\n\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(stream, { status: 200 }))
+
+    const log: string[] = []
+    await streamMessage({
+      conversationId: 'c1',
+      content: 'Draw a neon city',
+      callbacks: {
+        onStart: () => log.push('start'),
+        onToolStatus: (s) => log.push(`tool:${s.tool}:${s.status}`),
+        onAttachment: (a) => log.push(`att:${a.id}:${a.url}`),
+        onDelta: (d) => log.push(`delta:${d.delta}`),
+        onComplete: (c) => log.push(`complete:${c.message_id}`),
+      },
+    })
+
+    expect(log).toEqual([
+      'start',
+      'tool:generate_image:running',
+      'tool:generate_image:completed',
+      'att:att-1:https://signed.example/img.jpg',
+      'delta:Here is your neon city.',
+      'complete:m-img',
+    ])
+    fetchSpy.mockRestore()
+  })
 })

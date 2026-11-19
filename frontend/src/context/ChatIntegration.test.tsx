@@ -316,7 +316,7 @@ describe('Chat Application Integration', () => {
     render(<App initialUser={testUser} initialToken="expired-jwt" />)
 
     expect(
-      await screen.findByRole('heading', { name: /sign in to ai mini chatbot/i }),
+      await screen.findByRole('heading', { name: /sign in to doubleu ai/i }),
     ).toBeInTheDocument()
   })
 })

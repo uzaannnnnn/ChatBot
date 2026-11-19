@@ -5,21 +5,32 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/uzaannnnnn/ChatBot/backend/internal/domain"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/repository"
+	"github.com/uzaannnnnn/ChatBot/backend/internal/storage"
 )
 
 // ConversationService manages conversation lifecycle rules.
 type ConversationService struct {
-	repo repository.ConversationRepository
+	repo           repository.ConversationRepository
+	attachmentRepo repository.AttachmentRepository
+	storage        storage.ObjectStorage
 }
 
 // NewConversationService constructs a ConversationService.
 func NewConversationService(repo repository.ConversationRepository) *ConversationService {
 	return &ConversationService{repo: repo}
+}
+
+// WithAttachmentCleanup configures storage cleanup when a conversation is deleted.
+func (s *ConversationService) WithAttachmentCleanup(attRepo repository.AttachmentRepository, store storage.ObjectStorage) *ConversationService {
+	s.attachmentRepo = attRepo
+	s.storage = store
+	return s
 }
 
 // Create creates a conversation owned by ownerID. A blank title falls back to domain.DefaultConversationTitle.
@@ -93,7 +104,7 @@ func (s *ConversationService) UpdateTitle(ctx context.Context, ownerID, id, titl
 	return s.repo.UpdateConversationTitle(ctx, ownerID, id, title)
 }
 
-// Delete removes a conversation owned by ownerID and all of its messages.
+// Delete removes a conversation owned by ownerID, its messages, and any stored attachment objects.
 func (s *ConversationService) Delete(ctx context.Context, ownerID, id string) error {
 	if !domain.IsValidUUID(ownerID) {
 		return domain.ErrUnauthorized
@@ -101,7 +112,28 @@ func (s *ConversationService) Delete(ctx context.Context, ownerID, id string) er
 	if !domain.IsValidUUID(id) {
 		return domain.ErrInvalidID
 	}
-	return s.repo.DeleteConversation(ctx, ownerID, id)
+
+	var storagePaths []string
+	if s.attachmentRepo != nil && s.storage != nil {
+		paths, err := s.attachmentRepo.ListAttachmentStoragePathsByConversationID(ctx, ownerID, id)
+		if err != nil {
+			slog.Warn("failed to list conversation attachments prior to deletion", "conversation_id", id, "error", err)
+		} else {
+			storagePaths = paths
+		}
+	}
+
+	if err := s.repo.DeleteConversation(ctx, ownerID, id); err != nil {
+		return err
+	}
+
+	if len(storagePaths) > 0 && s.storage != nil {
+		if err := s.storage.DeleteObjects(ctx, storagePaths); err != nil {
+			slog.Warn("failed to clean up storage objects after conversation deletion", "conversation_id", id, "count", len(storagePaths), "error", err)
+		}
+	}
+
+	return nil
 }
 
 func validateTitle(title string) error {

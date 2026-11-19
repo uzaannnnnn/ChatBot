@@ -1,4 +1,5 @@
-import { Bot, LogOut, Plus, X } from 'lucide-react'
+import { LogOut, Plus, X } from 'lucide-react'
+import { BrandMark } from '@/components/common/BrandMark'
 import { ConversationList } from '@/components/conversation/ConversationList'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
@@ -60,9 +61,14 @@ export function Sidebar({ isOpenMobile, onCloseMobile }: SidebarProps) {
         <div className="flex h-14 items-center justify-between border-b border-border px-4">
           <div className="flex items-center gap-2.5 font-semibold tracking-tight text-foreground">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Bot className="h-4 w-4" aria-hidden="true" />
+              <BrandMark className="h-4 w-4" />
             </div>
-            <span className="text-sm">AI Mini Chatbot</span>
+            <div className="flex flex-col leading-none">
+              <span className="text-sm font-semibold tracking-tight">DOUBLEU AI</span>
+              <span className="mt-0.5 text-[10px] font-normal text-muted-foreground">
+                Think More. Discover More.
+              </span>
+            </div>
           </div>
           <button
             type="button"

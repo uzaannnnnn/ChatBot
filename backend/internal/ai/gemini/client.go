@@ -85,11 +85,28 @@ func (c *Client) resolveModel(requested string) string {
 
 // interactionRequest is the JSON payload sent to the Gemini Interactions API.
 type interactionRequest struct {
-	Model             string            `json:"model"`
-	Input             string            `json:"input"`
-	SystemInstruction string            `json:"system_instruction,omitempty"`
-	Stream            bool              `json:"stream"`
-	GenerationConfig  *generationConfig `json:"generation_config,omitempty"`
+	Model                 string            `json:"model"`
+	Input                 any               `json:"input"`
+	PreviousInteractionID string            `json:"previous_interaction_id,omitempty"`
+	SystemInstruction     string            `json:"system_instruction,omitempty"`
+	Tools                 []interactionTool `json:"tools,omitempty"`
+	Stream                bool              `json:"stream"`
+	GenerationConfig      *generationConfig `json:"generation_config,omitempty"`
+}
+
+type interactionTool struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+type functionResultInput struct {
+	Type    string `json:"type"`
+	CallID  string `json:"call_id"`
+	Name    string `json:"name"`
+	Result  any    `json:"result"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 type generationConfig struct {
@@ -126,8 +143,37 @@ func (c *Client) buildInteractionPayload(req ai.ChatRequest, stream bool) intera
 		}
 	}
 
-	input := strings.Join(dialogParts, "\n\n")
+	var input any
+	if len(req.ToolResults) > 0 {
+		items := make([]functionResultInput, 0, len(req.ToolResults))
+		for _, tr := range req.ToolResults {
+			items = append(items, functionResultInput{
+				Type:    "function_result",
+				CallID:  tr.CallID,
+				Name:    tr.Name,
+				Result:  tr.Result,
+				IsError: tr.IsError,
+			})
+		}
+		input = items
+	} else {
+		input = strings.Join(dialogParts, "\n\n")
+	}
+
 	systemInstruction := strings.Join(systemInstructions, "\n\n")
+
+	var tools []interactionTool
+	if len(req.Tools) > 0 {
+		tools = make([]interactionTool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			tools = append(tools, interactionTool{
+				Type:        "function",
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			})
+		}
+	}
 
 	var genCfg *generationConfig
 	if req.Temperature > 0 || req.MaxTokens > 0 {
@@ -138,10 +184,12 @@ func (c *Client) buildInteractionPayload(req ai.ChatRequest, stream bool) intera
 	}
 
 	return interactionRequest{
-		Model:             model,
-		Input:             input,
-		SystemInstruction: systemInstruction,
-		Stream:            stream,
-		GenerationConfig:  genCfg,
+		Model:                 model,
+		Input:                 input,
+		PreviousInteractionID: strings.TrimSpace(req.PreviousInteractionID),
+		SystemInstruction:     systemInstruction,
+		Tools:                 tools,
+		Stream:                stream,
+		GenerationConfig:      genCfg,
 	}
 }

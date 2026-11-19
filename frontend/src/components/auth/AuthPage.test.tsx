@@ -28,9 +28,11 @@ describe('AuthPage', () => {
       </AuthProvider>,
     )
 
-    expect(screen.getByRole('heading', { name: /sign in to ai mini chatbot/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /sign in to doubleu ai/i })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^register$/i }))
-    expect(screen.getByRole('heading', { name: /create your account/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: /create your doubleu ai account/i }),
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /create account/i })).toBeInTheDocument()
   })
 })

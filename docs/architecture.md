@@ -95,3 +95,15 @@ sequenceDiagram
 3. **Bounded Context Assembly**:
    - `ListRecentMessages` fetches the latest `N` messages using `ORDER BY created_at DESC, id DESC LIMIT $2` subqueried into chronological `created_at ASC, id ASC`.
    - The assembled context is bounded to prevent token window overflow and control inference cost.
+
+
+---
+
+## DOUBLEU AI v2.0 Architecture Additions
+
+### Structured Tool Orchestration & Image Generation
+
+1. **Gemini Interactions API (`internal/ai/gemini`)**: Sends registered server-side `tools` schemas (`type: "function"`) alongside conversation context and parses structured `function_call` events (`step.start` / `step.delta` / `content.delta` / `interaction.completed`). Plain-text pseudo-tool JSON (e.g., `dalle.text2im`) is never executed as a tool call.
+2. **Backend Tool Registry (`internal/ai/tools`)**: Controls all tool executions server-side with strict JSON validation (`DisallowUnknownFields`), per-execution timeout (`IMAGE_GEN_TIMEOUT`), per-user token-bucket rate limiting, maximum 1 tool call per user request, and usage/failure metrics.
+3. **Cloudflare Image Provider (`internal/ai/cloudflare`)**: Calls `POST /accounts/{ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, decodes Base64 JSON (or raw binary fallback), validates image magic bytes (`image/jpeg`, `image/png`, `image/webp`) and dimensions, and redacts credentials from all errors.
+4. **Private Supabase Storage (`internal/storage`)**: Uploads validated image bytes to the private bucket (`SUPABASE_STORAGE_BUCKET`), generates short-lived signed URLs (`SIGNED_URL_TTL`), deletes orphaned objects on partial failure, and cleans up objects on conversation deletion.

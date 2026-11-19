@@ -7,15 +7,35 @@ export interface Conversation {
   updated_at: string
 }
 
+export interface MessageAttachment {
+  id: string
+  kind: 'image'
+  url: string
+  mime_type: string
+  alt_text: string
+  width: number
+  height: number
+}
+
+export type ToolExecutionState = 'running' | 'completed' | 'failed'
+
+export interface ToolStatus {
+  tool: string
+  status: ToolExecutionState
+  message?: string
+}
+
 export interface Message {
   id: string
   conversation_id: string
   role: MessageRole
   content: string
+  attachments?: MessageAttachment[]
   created_at: string
   /** Client-only optimistic flags; never sent to backend */
   isOptimistic?: boolean
   isStreaming?: boolean
+  toolStatuses?: ToolStatus[]
 }
 
 export interface PaginationMeta {
@@ -63,6 +83,14 @@ export interface SSEContentDeltaPayload {
   delta: string
 }
 
+export interface SSEToolStatusPayload {
+  tool: string
+  status: ToolExecutionState
+  message?: string
+}
+
+export type SSEAttachmentPayload = MessageAttachment
+
 export interface SSEMessageCompletePayload {
   status: 'completed'
   message_id: string
@@ -76,5 +104,7 @@ export interface SSEErrorPayload {
 export type SSEEvent =
   | { event: 'message_start'; data: SSEMessageStartPayload }
   | { event: 'content_delta'; data: SSEContentDeltaPayload }
+  | { event: 'tool_status'; data: SSEToolStatusPayload }
+  | { event: 'attachment'; data: SSEAttachmentPayload }
   | { event: 'message_complete'; data: SSEMessageCompletePayload }
   | { event: 'error'; data: SSEErrorPayload }

@@ -206,7 +206,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setMessages((prev) =>
       prev
         .map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
-        .filter((m) => !(m.role === 'assistant' && m.isOptimistic && m.content.trim() === '')),
+        .filter(
+          (m) =>
+            !(
+              m.role === 'assistant' &&
+              m.isOptimistic &&
+              m.content.trim() === '' &&
+              (!m.attachments || m.attachments.length === 0)
+            ),
+        ),
     )
   }, [cancelActiveStream])
 
@@ -306,6 +314,44 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 rafIdRef.current = requestAnimationFrame(flushPendingDeltas)
               }
             },
+            onToolStatus: (statusPayload) => {
+              if (
+                streamGenerationRef.current !== myGen ||
+                activeConversationIdRef.current !== targetConvId
+              ) {
+                return
+              }
+              setMessages((prev) =>
+                prev.map((m) => {
+                  if (m.id !== tempAssistantId) return m
+                  const existing = m.toolStatuses ?? []
+                  const idx = existing.findIndex((s) => s.tool === statusPayload.tool)
+                  const nextStatuses =
+                    idx >= 0
+                      ? existing.map((s, i) => (i === idx ? statusPayload : s))
+                      : [...existing, statusPayload]
+                  return { ...m, toolStatuses: nextStatuses }
+                }),
+              )
+            },
+            onAttachment: (attachmentPayload) => {
+              if (
+                streamGenerationRef.current !== myGen ||
+                activeConversationIdRef.current !== targetConvId
+              ) {
+                return
+              }
+              setMessages((prev) =>
+                prev.map((m) => {
+                  if (m.id !== tempAssistantId) return m
+                  const existing = m.attachments ?? []
+                  if (existing.some((a) => a.id === attachmentPayload.id)) {
+                    return m
+                  }
+                  return { ...m, attachments: [...existing, attachmentPayload] }
+                }),
+              )
+            },
             onComplete: ({ message_id }) => {
               flushPendingDeltas()
               if (
@@ -367,10 +413,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setError(formatErrorMessage(err))
         // Keep user message visible; remove empty/incomplete assistant placeholder
         setMessages((prev) =>
-          prev.filter((m) => m.id !== tempAssistantId || m.content.trim() !== ''),
-        )
-        setMessages((prev) =>
-          prev.map((m) => (m.id === tempAssistantId ? { ...m, isStreaming: false } : m)),
+          prev
+            .filter(
+              (m) =>
+                m.id !== tempAssistantId ||
+                m.content.trim() !== '' ||
+                (m.attachments && m.attachments.length > 0),
+            )
+            .map((m) => (m.id === tempAssistantId ? { ...m, isStreaming: false } : m)),
         )
       } finally {
         if (streamGenerationRef.current === myGen) {

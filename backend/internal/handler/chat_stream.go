@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/domain"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/dto"
+	"github.com/uzaannnnnn/ChatBot/backend/internal/service"
 )
 
 // ChatStreamService defines the conversation streaming business operations.
@@ -17,6 +18,18 @@ type ChatStreamService interface {
 		conversationID string,
 		userContent string,
 		onChunk func(delta string) error,
+	) (domain.Message, domain.Message, error)
+}
+
+// ChatEventStreamService extends ChatStreamService with structured tool status
+// and attachment SSE callbacks.
+type ChatEventStreamService interface {
+	StreamMessageWithEvents(
+		ctx context.Context,
+		ownerID string,
+		conversationID string,
+		userContent string,
+		callbacks service.StreamCallbacks,
 	) (domain.Message, domain.Message, error)
 }
 
@@ -76,7 +89,7 @@ func (h *ChatStreamHandler) Stream(c *gin.Context) {
 		}
 	}
 
-	onChunk := func(delta string) error {
+	onDelta := func(delta string) error {
 		ensureHeaders()
 		c.SSEvent("content_delta", gin.H{
 			"delta": delta,
@@ -85,7 +98,53 @@ func (h *ChatStreamHandler) Stream(c *gin.Context) {
 		return c.Request.Context().Err()
 	}
 
-	_, assistantMsg, err := h.chatSvc.StreamMessage(c.Request.Context(), ownerID, conversationID, *req.Content, onChunk)
+	onToolStatus := func(evt service.ToolStatusEvent) error {
+		ensureHeaders()
+		payload := gin.H{
+			"tool":   evt.Tool,
+			"status": evt.Status,
+		}
+		if evt.Message != "" {
+			payload["message"] = evt.Message
+		}
+		c.SSEvent("tool_status", payload)
+		flusher.Flush()
+		return c.Request.Context().Err()
+	}
+
+	onAttachment := func(att domain.MessageAttachment) error {
+		ensureHeaders()
+		c.SSEvent("attachment", dto.ToAttachmentResponse(att))
+		flusher.Flush()
+		return c.Request.Context().Err()
+	}
+
+	var (
+		assistantMsg domain.Message
+		err          error
+	)
+	if eventSvc, ok := h.chatSvc.(ChatEventStreamService); ok {
+		_, assistantMsg, err = eventSvc.StreamMessageWithEvents(
+			c.Request.Context(),
+			ownerID,
+			conversationID,
+			*req.Content,
+			service.StreamCallbacks{
+				OnDelta:      onDelta,
+				OnToolStatus: onToolStatus,
+				OnAttachment: onAttachment,
+			},
+		)
+	} else {
+		_, assistantMsg, err = h.chatSvc.StreamMessage(
+			c.Request.Context(),
+			ownerID,
+			conversationID,
+			*req.Content,
+			onDelta,
+		)
+	}
+
 	if err != nil {
 		if headersCommitted {
 			// Headers already sent (200 OK): emit an SSE error event if client is still connected.

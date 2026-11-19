@@ -54,12 +54,47 @@ type Conversation struct {
 	UpdatedAt time.Time
 }
 
+// AttachmentKind identifies the category of a message attachment.
+type AttachmentKind string
+
+const (
+	AttachmentKindImage AttachmentKind = "image"
+)
+
+// MessageAttachment represents metadata for an attachment linked to a message.
+type MessageAttachment struct {
+	ID          string
+	MessageID   string
+	Kind        AttachmentKind
+	StoragePath string
+	URL         string
+	MIMEType    string
+	Width       int
+	Height      int
+	Prompt      string
+	AltText     string
+	CreatedAt   time.Time
+}
+
+// NewMessageAttachment holds the fields required to persist an attachment.
+type NewMessageAttachment struct {
+	ID          string
+	Kind        AttachmentKind
+	StoragePath string
+	MIMEType    string
+	Width       int
+	Height      int
+	Prompt      string
+	AltText     string
+}
+
 // Message is a single conversation entry authored by the user or the assistant.
 type Message struct {
 	ID             string
 	ConversationID string
 	Role           Role
 	Content        string
+	Attachments    []MessageAttachment
 	CreatedAt      time.Time
 }
 

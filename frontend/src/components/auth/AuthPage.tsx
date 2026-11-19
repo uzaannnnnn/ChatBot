@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Bot } from 'lucide-react'
+import { BrandMark } from '@/components/common/BrandMark'
 import { ErrorState } from '@/components/common/ErrorState'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -62,16 +62,19 @@ export function AuthPage() {
     <div className="flex min-h-dvh items-center justify-center bg-background px-4 py-12">
       <div className="w-full max-w-sm space-y-6 rounded-xl border border-border bg-card p-6 shadow-sm">
         <div className="flex flex-col items-center text-center">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <Bot className="h-5 w-5" aria-hidden="true" />
+          <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-xs">
+            <BrandMark className="h-6 w-6" />
           </div>
           <h1 className="text-lg font-semibold tracking-tight text-foreground">
-            {mode === 'login' ? 'Sign in to AI Mini Chatbot' : 'Create your account'}
+            {mode === 'login' ? 'Sign in to DOUBLEU AI' : 'Create your DOUBLEU AI account'}
           </h1>
+          <p className="mt-1 text-xs font-medium text-muted-foreground">
+            Think More. Discover More.
+          </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {mode === 'login'
-              ? 'Enter your credentials to access your conversations.'
-              : 'Sign up to start chatting with AI Assistant.'}
+              ? 'Enter your credentials to access your AI workspace.'
+              : 'Sign up to start chatting, coding, and generating images.'}
           </p>
         </div>
 

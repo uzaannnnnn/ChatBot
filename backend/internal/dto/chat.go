@@ -51,13 +51,25 @@ type ConversationResponse struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AttachmentResponse is the serialized representation of a message attachment.
+type AttachmentResponse struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	URL      string `json:"url"`
+	MIMEType string `json:"mime_type"`
+	AltText  string `json:"alt_text"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
 // MessageResponse is the serialized representation of a message.
 type MessageResponse struct {
-	ID             string      `json:"id"`
-	ConversationID string      `json:"conversation_id"`
-	Role           domain.Role `json:"role"`
-	Content        string      `json:"content"`
-	CreatedAt      time.Time   `json:"created_at"`
+	ID             string               `json:"id"`
+	ConversationID string               `json:"conversation_id"`
+	Role           domain.Role          `json:"role"`
+	Content        string               `json:"content"`
+	Attachments    []AttachmentResponse `json:"attachments,omitempty"`
+	CreatedAt      time.Time            `json:"created_at"`
 }
 
 // PaginationMeta describes offset pagination metadata on list endpoints.
@@ -109,13 +121,34 @@ func ToConversationResponses(items []domain.Conversation) []ConversationResponse
 	return out
 }
 
+// ToAttachmentResponse converts a domain.MessageAttachment to a DTO.
+func ToAttachmentResponse(a domain.MessageAttachment) AttachmentResponse {
+	return AttachmentResponse{
+		ID:       a.ID,
+		Kind:     string(a.Kind),
+		URL:      a.URL,
+		MIMEType: a.MIMEType,
+		AltText:  a.AltText,
+		Width:    a.Width,
+		Height:   a.Height,
+	}
+}
+
 // ToMessageResponse converts a domain.Message to a DTO with a UTC timestamp.
 func ToMessageResponse(m domain.Message) MessageResponse {
+	var attachments []AttachmentResponse
+	if len(m.Attachments) > 0 {
+		attachments = make([]AttachmentResponse, 0, len(m.Attachments))
+		for _, a := range m.Attachments {
+			attachments = append(attachments, ToAttachmentResponse(a))
+		}
+	}
 	return MessageResponse{
 		ID:             m.ID,
 		ConversationID: m.ConversationID,
 		Role:           m.Role,
 		Content:        m.Content,
+		Attachments:    attachments,
 		CreatedAt:      m.CreatedAt.UTC(),
 	}
 }

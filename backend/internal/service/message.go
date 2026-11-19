@@ -2,21 +2,38 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/uzaannnnnn/ChatBot/backend/internal/domain"
 	"github.com/uzaannnnnn/ChatBot/backend/internal/repository"
+	"github.com/uzaannnnnn/ChatBot/backend/internal/storage"
 )
 
 // MessageService manages message rules.
 type MessageService struct {
-	repo repository.MessageRepository
+	repo         repository.MessageRepository
+	storage      storage.ObjectStorage
+	signedURLTTL time.Duration
 }
 
 // NewMessageService constructs a MessageService.
 func NewMessageService(repo repository.MessageRepository) *MessageService {
-	return &MessageService{repo: repo}
+	return &MessageService{
+		repo:         repo,
+		signedURLTTL: storage.DefaultSignedURLTTL,
+	}
+}
+
+// WithStorage attaches private object storage for signing attachment URLs on read.
+func (s *MessageService) WithStorage(store storage.ObjectStorage, signedURLTTL time.Duration) *MessageService {
+	s.storage = store
+	if signedURLTTL > 0 {
+		s.signedURLTTL = signedURLTTL
+	}
+	return s
 }
 
 // Create validates and stores a message in a conversation owned by ownerID.
@@ -70,6 +87,23 @@ func (s *MessageService) ListPage(ctx context.Context, ownerID, conversationID s
 	if hasMore {
 		items = items[:page.Limit]
 	}
+
+	if s.storage != nil {
+		for i := range items {
+			for j := range items[i].Attachments {
+				att := &items[i].Attachments[j]
+				if att.URL == "" && att.StoragePath != "" {
+					signedURL, signErr := s.storage.CreateSignedURL(ctx, att.StoragePath, s.signedURLTTL)
+					if signErr != nil {
+						slog.Warn("failed to sign attachment url", "attachment_id", att.ID, "error", signErr)
+						continue
+					}
+					att.URL = signedURL
+				}
+			}
+		}
+	}
+
 	return items, hasMore, nil
 }
 

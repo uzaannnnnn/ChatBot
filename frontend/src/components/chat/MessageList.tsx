@@ -9,6 +9,7 @@ interface MessageListProps {
   isLoading: boolean
   hasActiveConversation: boolean
   onNewChat: () => void
+  onSelectPrompt?: (prompt: string) => void
 }
 
 export function MessageList({
@@ -16,6 +17,7 @@ export function MessageList({
   isLoading,
   hasActiveConversation,
   onNewChat,
+  onSelectPrompt,
 }: MessageListProps) {
   const lastContent = messages[messages.length - 1]?.content ?? ''
   const { containerRef, handleScroll } = useAutoScroll<HTMLDivElement>(
@@ -41,6 +43,7 @@ export function MessageList({
     return (
       <EmptyState
         onNewChat={!hasActiveConversation ? onNewChat : undefined}
+        onSelectPrompt={onSelectPrompt}
         isLoading={isLoading}
       />
     )

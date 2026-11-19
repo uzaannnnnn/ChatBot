@@ -189,3 +189,16 @@ cd backend
 TEST_DATABASE_URL="postgres://user:pass@localhost:5432/chatbot_test?sslmode=disable" \
   go test -tags=integration -race -count=1 -v ./internal/repository/postgres/...
 ```
+
+
+---
+
+## Migration 000003 — `chatbot.message_attachments`
+
+Added in DOUBLEU AI v2.0 (`backend/migrations/000003_create_message_attachments.up.sql` / `.down.sql`):
+
+- Stores metadata only (`id`, `message_id`, `kind`, `storage_path`, `mime_type`, `width`, `height`, `prompt`, `alt_text`, `created_at`).
+- Binary image bytes are stored exclusively in private Supabase Storage, never as Base64 in PostgreSQL.
+- `message_id` references `chatbot.messages(id) ON DELETE CASCADE`.
+- Indexed on `(message_id, created_at, id)` for fast history hydration.
+- `anon` and `authenticated` Supabase Data API roles are revoked from `chatbot.message_attachments`.

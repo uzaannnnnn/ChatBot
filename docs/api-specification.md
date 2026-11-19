@@ -380,3 +380,42 @@ go run ./cmd/api
 # 4. Run unit and handler tests (no database required)
 go test -race -count=1 ./...
 ```
+
+
+---
+
+## v2.0 Additive SSE & Attachment Contract
+
+### Message Response (`GET /api/v1/conversations/:id/messages`)
+
+Messages include an optional `attachments` array when generated images are linked:
+
+```json
+{
+  "id": "uuid",
+  "conversation_id": "uuid",
+  "role": "assistant",
+  "content": "Here is your generated image.",
+  "attachments": [
+    {
+      "id": "uuid",
+      "kind": "image",
+      "url": "https://<project>.supabase.co/storage/v1/object/sign/chat-attachments/...",
+      "mime_type": "image/jpeg",
+      "alt_text": "Prompt description",
+      "width": 1024,
+      "height": 1024
+    }
+  ],
+  "created_at": "2026-11-19T13:00:00Z"
+}
+```
+
+### Additive SSE Events (`POST /api/v1/conversations/:id/messages/stream`)
+
+Existing events (`message_start`, `content_delta`, `message_complete`, `error`) are preserved. Two additive events are emitted when a backend tool runs:
+
+- `event: tool_status` — `{"tool":"generate_image","status":"running|completed|failed","message":"optional error detail"}`
+- `event: attachment` — `{"id":"uuid","kind":"image","url":"https://...","mime_type":"image/jpeg","alt_text":"...","width":1024,"height":1024}`
+
+Base64 image data is never transmitted over SSE.

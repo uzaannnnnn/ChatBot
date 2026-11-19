@@ -58,7 +58,7 @@ export function MessageComposer({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Message AI Assistant..."
+          placeholder="Ask DOUBLEU AI anything or describe an image to generate..."
           aria-label="Message input"
           rows={1}
           disabled={disabled}

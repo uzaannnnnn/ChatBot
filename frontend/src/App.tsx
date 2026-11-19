@@ -12,10 +12,10 @@ function AppContent() {
     return (
       <div
         role="status"
-        aria-label="Loading session"
+        aria-label="Loading DOUBLEU AI"
         className="flex min-h-dvh items-center justify-center bg-background text-sm text-muted-foreground"
       >
-        Loading session...
+        Loading DOUBLEU AI...
       </div>
     )
   }
