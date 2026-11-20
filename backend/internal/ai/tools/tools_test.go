@@ -182,3 +182,26 @@ func TestGenerateImageTool_OrphanCleanupOnSignFailure(t *testing.T) {
 		t.Errorf("expected uploaded orphan to be deleted, uploaded=%v deleted=%v", store.uploaded, store.deleted)
 	}
 }
+
+func TestBuildAltText_PreservesFullPromptAndUTF8(t *testing.T) {
+	longPrompt := "A minimalist studio desk bathed in soft, warm morning sunlight. The scene features long, elegant shadows cast across a clean, light-colored wooden desk surface with a ceramic mug and notebook."
+	if got := buildAltText("  " + longPrompt + "  "); got != longPrompt {
+		t.Errorf("expected full >160-char prompt preserved:\nwant: %q\ngot:  %q", longPrompt, got)
+	}
+
+	utf8Prompt := "日出時の静かな海と温かい朝の光 — café minimalist studio desk with warm morning shadows 🌅✨ " +
+		"A serene sunlit workspace with clean wooden grain, soft natural shadows, and peaceful atmosphere extending well beyond one hundred and sixty bytes."
+	gotUTF8 := buildAltText(utf8Prompt)
+	if gotUTF8 != utf8Prompt {
+		t.Errorf("expected multi-byte UTF-8 prompt preserved verbatim:\nwant: %q\ngot:  %q", utf8Prompt, gotUTF8)
+	}
+
+	overLimit := ""
+	for i := 0; i < aiimage.MaxPromptLength+25; i++ {
+		overLimit += "あ"
+	}
+	bounded := buildAltText(overLimit)
+	if len([]rune(bounded)) != aiimage.MaxPromptLength {
+		t.Errorf("expected prompt bounded to %d runes, got %d", aiimage.MaxPromptLength, len([]rune(bounded)))
+	}
+}

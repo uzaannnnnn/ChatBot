@@ -138,4 +138,43 @@ describe('AssistantMessage image generation & tool states', () => {
     render(<AssistantMessage message={msg} />)
     expect(screen.getByText(/"status":"ok"/)).toBeInTheDocument()
   })
+
+  it('displays full >160-char alt_text in lightbox without line-clamp while keeping compact card caption', () => {
+    const fullDescription =
+      'A minimalist studio desk bathed in soft, warm morning sunlight. The scene features long, elegant shadows cast across a clean, light-colored wooden desk surface with a ceramic mug and notebook.'
+    const msg: Message = {
+      id: 'm6',
+      conversation_id: 'c1',
+      role: 'assistant',
+      content: 'Here is your generated image.',
+      created_at: new Date().toISOString(),
+      attachments: [
+        {
+          id: 'att-long-alt',
+          kind: 'image',
+          url: 'https://signed.example/studio-desk.jpg',
+          mime_type: 'image/jpeg',
+          alt_text: fullDescription,
+          width: 1024,
+          height: 1024,
+        },
+      ],
+    }
+
+    render(<AssistantMessage message={msg} />)
+
+    // Compact thumbnail card keeps single-line truncate
+    const caption = screen.getByText(fullDescription)
+    expect(caption.tagName.toLowerCase()).toBe('figcaption')
+    expect(caption.className).toContain('truncate')
+
+    // Open lightbox preview -> full description wraps naturally without line-clamp-2
+    fireEvent.click(screen.getByRole('button', { name: 'Open full-size preview' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent(fullDescription)
+    const descEl = dialog.querySelector('p')
+    expect(descEl).not.toBeNull()
+    expect(descEl?.className).not.toContain('line-clamp-2')
+    expect(descEl?.className).toContain('overflow-y-auto')
+  })
 })

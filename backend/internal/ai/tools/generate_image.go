@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/uzaannnnnn/ChatBot/backend/internal/ai"
 	aiimage "github.com/uzaannnnnn/ChatBot/backend/internal/ai/image"
@@ -223,10 +224,17 @@ func (t *GenerateImageTool) Execute(ctx context.Context, execCtx ExecutionContex
 
 func buildAltText(prompt string) string {
 	cleaned := strings.TrimSpace(prompt)
-	if len(cleaned) > 160 {
-		return cleaned[:157] + "..."
+	if cleaned == "" {
+		return ""
 	}
-	return cleaned
+	if !utf8.ValidString(cleaned) {
+		cleaned = strings.ToValidUTF8(cleaned, "")
+	}
+	if utf8.RuneCountInString(cleaned) <= aiimage.MaxPromptLength {
+		return cleaned
+	}
+	runes := []rune(cleaned)
+	return string(runes[:aiimage.MaxPromptLength])
 }
 
 func newUUIDv4() (string, error) {

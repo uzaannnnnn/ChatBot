@@ -168,7 +168,7 @@ export function AttachmentGallery({ attachments }: AttachmentGalleryProps) {
         <DialogContent className="max-w-3xl p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="pr-8 text-sm">Generated Image</DialogTitle>
-            <DialogDescription className="line-clamp-2 text-xs">
+            <DialogDescription className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-xs">
               {activeAttachment?.alt_text || 'DOUBLEU AI generated image'}
             </DialogDescription>
           </DialogHeader>
