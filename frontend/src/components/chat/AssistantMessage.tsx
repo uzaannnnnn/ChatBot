@@ -15,45 +15,98 @@ interface AssistantMessageProps {
 const PSEUDO_TOOL_FALLBACK =
   'Image generation could not be completed because the model did not invoke the image tool properly. Please try again.'
 
-function isPseudoToolPayload(content: string): boolean {
-  const trimmed = content.trim()
-  if (!trimmed) return false
-  const lower = trimmed.toLowerCase()
-  if (
-    lower.includes('"dalle.text2im"') ||
-    (lower.includes('"action_input"') && lower.includes('"dalle'))
-  ) {
-    return true
-  }
-  let unwrapped = trimmed
-  if (unwrapped.startsWith('```')) {
-    const firstNewline = unwrapped.indexOf('\n')
-    if (firstNewline !== -1) {
-      unwrapped = unwrapped.slice(firstNewline + 1).trim()
+function isPseudoToolObject(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return false
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>
+    const action = typeof parsed.action === 'string' ? parsed.action.toLowerCase().trim() : ''
+    const tool = typeof parsed.tool === 'string' ? parsed.tool.toLowerCase().trim() : ''
+    if (
+      action.includes('dalle') ||
+      action.includes('text2im') ||
+      action === 'generate_image' ||
+      tool === 'generate_image' ||
+      tool.includes('dalle') ||
+      tool.includes('text2im')
+    ) {
+      return true
     }
-    if (unwrapped.endsWith('```')) {
-      unwrapped = unwrapped.slice(0, -3).trim()
+    if ('action_input' in parsed && ('thought' in parsed || 'action' in parsed)) {
+      return true
     }
+    return false
+  } catch {
+    return false
   }
-  if (unwrapped.startsWith('{') && unwrapped.endsWith('}')) {
-    try {
-      const parsed = JSON.parse(unwrapped) as Record<string, unknown>
-      const action = typeof parsed.action === 'string' ? parsed.action.toLowerCase() : ''
-      const tool = typeof parsed.tool === 'string' ? parsed.tool.toLowerCase() : ''
-      if (
-        action.includes('dalle') ||
-        action.includes('text2im') ||
-        action === 'generate_image' ||
-        tool === 'generate_image' ||
-        tool.includes('dalle')
-      ) {
-        return true
+}
+
+function findBalancedJsonEnd(s: string, start: number): number {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
       }
-    } catch {
-      return false
+      if (ch === '\\') {
+        escaped = true
+        continue
+      }
+      if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return i + 1
     }
   }
-  return false
+  return -1
+}
+
+function sanitizeDisplayContent(content: string, hasAttachments: boolean): string {
+  if (!content.trim()) return content
+
+  let out = ''
+  let foundPseudo = false
+  let i = 0
+  while (i < content.length) {
+    if (content.startsWith('```', i)) {
+      const nl = content.indexOf('\n', i)
+      const closeIdx = nl !== -1 ? content.indexOf('```', nl + 1) : -1
+      if (nl !== -1 && closeIdx !== -1) {
+        const inner = content.slice(nl + 1, closeIdx).trim()
+        if (isPseudoToolObject(inner)) {
+          foundPseudo = true
+          i = closeIdx + 3
+          while (i < content.length && (content[i] === '\r' || content[i] === '\n')) i++
+          continue
+        }
+      }
+    }
+    if (content[i] === '{') {
+      const end = findBalancedJsonEnd(content, i)
+      if (end !== -1 && isPseudoToolObject(content.slice(i, end))) {
+        foundPseudo = true
+        i = end
+        continue
+      }
+    }
+    out += content[i]
+    i++
+  }
+
+  if (!foundPseudo) return content
+  const cleaned = out.trim()
+  if (cleaned !== '') return cleaned
+  return hasAttachments ? '' : PSEUDO_TOOL_FALLBACK
 }
 
 export const AssistantMessage = React.memo(function AssistantMessage({
@@ -65,8 +118,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({
     message.isStreaming && message.content.trim() === '' && !hasAttachments && !hasToolStatuses,
   )
 
-  const displayContent =
-    !hasAttachments && isPseudoToolPayload(message.content) ? PSEUDO_TOOL_FALLBACK : message.content
+  const displayContent = sanitizeDisplayContent(message.content, hasAttachments)
 
   return (
     <div className="flex w-full items-start gap-3" data-testid="assistant-message">

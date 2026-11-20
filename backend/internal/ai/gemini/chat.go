@@ -95,7 +95,10 @@ func (c *Client) Chat(ctx context.Context, req ai.ChatRequest) (ai.ChatResponse,
 				}
 			case "model_output":
 				for _, part := range step.Content {
-					if part.Type == "text" || part.Text != "" {
+					if isThoughtStepType(part.Type) {
+						continue
+					}
+					if part.Type == "text" || (part.Type == "" && part.Text != "") {
 						output.WriteString(part.Text)
 					}
 				}

@@ -391,6 +391,107 @@ func TestChatService_ToolFailureWithPreambleTextPersistsFailureExplanation(t *te
 	}
 }
 
+func TestChatService_SuccessfulImageGenStripsDallePseudoToolAndThought(t *testing.T) {
+	ownerID := "11111111-1111-1111-1111-111111111111"
+	convID := "22222222-2222-2222-2222-222222222222"
+
+	// Simulate Gemini emitting raw dalle.text2im + thought JSON alongside a real generate_image call
+	provider := &scriptedProvider{
+		turns: [][]ai.StreamChunk{
+			{
+				{Delta: `{"action":"dalle.text2im","action_input":{"prompt":"minimalist sunlit studio desk"},"thought":"I should call image tool"}`},
+				{
+					InteractionID: "inter_leak_1",
+					ToolCalls: []ai.ToolCall{
+						{ID: "call_leak_1", Name: tools.ToolNameGenerateImage, Arguments: json.RawMessage(`{"prompt":"minimalist sunlit studio desk with warm morning shadows"}`)},
+					},
+				},
+			},
+			{
+				{Delta: "Here is your minimalist sunlit studio desk with warm morning shadows."},
+			},
+		},
+	}
+
+	store := &stubObjectStorage{}
+	repo := &stubAttachmentRepo{}
+	reg := tools.NewRegistry(10 * time.Second)
+	reg.Register(tools.NewGenerateImageTool(tools.GenerateImageOptions{
+		Provider:  &stubImageProvider{data: tinyPNG(t)},
+		Storage:   store,
+		RateLimit: rate.Limit(10),
+		RateBurst: 5,
+	}))
+
+	svc := NewChatService(nil, repo, provider, ChatServiceConfig{ModelID: "gemini-3.1-flash-lite"}).
+		WithToolRegistry(reg).
+		WithAttachmentStore(repo, store)
+
+	var streamed strings.Builder
+	var attachments []domain.MessageAttachment
+	_, assistantMsg, err := svc.StreamMessageWithEvents(context.Background(), ownerID, convID, "Generate an image of a minimalist sunlit studio desk with warm morning shadows.", StreamCallbacks{
+		OnDelta: func(delta string) error {
+			streamed.WriteString(delta)
+			return nil
+		},
+		OnAttachment: func(att domain.MessageAttachment) error {
+			attachments = append(attachments, att)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StreamMessageWithEvents failed: %v", err)
+	}
+
+	if len(attachments) != 1 || len(assistantMsg.Attachments) != 1 {
+		t.Fatalf("expected generated attachment to be delivered and persisted")
+	}
+	for _, forbidden := range []string{"dalle.text2im", "action_input", "I should call image tool"} {
+		if strings.Contains(streamed.String(), forbidden) {
+			t.Errorf("SSE streamed text leaked %q: %q", forbidden, streamed.String())
+		}
+		if strings.Contains(assistantMsg.Content, forbidden) {
+			t.Errorf("persisted assistant content leaked %q: %q", forbidden, assistantMsg.Content)
+		}
+	}
+	if assistantMsg.Content != "Here is your minimalist sunlit studio desk with warm morning shadows." {
+		t.Errorf("unexpected assistant content: %q", assistantMsg.Content)
+	}
+}
+
+func TestChatService_PreservesLegitimateUserRequestedJSON(t *testing.T) {
+	ownerID := "11111111-1111-1111-1111-111111111111"
+	convID := "22222222-2222-2222-2222-222222222222"
+
+	expected := "Here is a sample user JSON:\n\n```json\n{\"name\":\"Alice\",\"role\":\"admin\"}\n```"
+	provider := &scriptedProvider{
+		turns: [][]ai.StreamChunk{{
+			{Delta: "Here is a sample user JSON:\n\n```json\n"},
+			{Delta: `{"name":"Alice",`},
+			{Delta: `"role":"admin"}` + "\n```"},
+		}},
+	}
+	repo := &stubAttachmentRepo{}
+	svc := NewChatService(nil, repo, provider, ChatServiceConfig{})
+
+	var streamed strings.Builder
+	_, assistantMsg, err := svc.StreamMessageWithEvents(context.Background(), ownerID, convID, "Give me a sample JSON object", StreamCallbacks{
+		OnDelta: func(delta string) error {
+			streamed.WriteString(delta)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if streamed.String() != expected {
+		t.Errorf("legitimate JSON corrupted in stream:\nwant: %q\ngot:  %q", expected, streamed.String())
+	}
+	if assistantMsg.Content != expected {
+		t.Errorf("legitimate JSON corrupted in persisted content:\nwant: %q\ngot:  %q", expected, assistantMsg.Content)
+	}
+}
+
 type mockConvRepo struct{}
 
 func (m *mockConvRepo) CreateConversation(ctx context.Context, ownerID, title string) (domain.Conversation, error) {

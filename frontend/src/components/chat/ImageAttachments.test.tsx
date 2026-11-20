@@ -97,4 +97,45 @@ describe('AssistantMessage image generation & tool states', () => {
     expect(screen.queryByText(/dalle\.text2im/i)).not.toBeInTheDocument()
     expect(screen.getByText(/image generation could not be completed/i)).toBeInTheDocument()
   })
+
+  it('strips leaked dalle.text2im + thought JSON while preserving attachment and normal prose', () => {
+    const msg: Message = {
+      id: 'm4',
+      conversation_id: 'c1',
+      role: 'assistant',
+      content:
+        '{"action":"dalle.text2im","action_input":{"prompt":"desk"},"thought":"internal"}\n\nHere is your minimalist studio desk.',
+      created_at: new Date().toISOString(),
+      attachments: [
+        {
+          id: 'att-desk',
+          kind: 'image',
+          url: 'https://signed.example/desk.jpg',
+          mime_type: 'image/jpeg',
+          alt_text: 'Minimalist sunlit studio desk',
+          width: 1024,
+          height: 1024,
+        },
+      ],
+    }
+
+    render(<AssistantMessage message={msg} />)
+    expect(screen.queryByText(/dalle\.text2im/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/internal/i)).not.toBeInTheDocument()
+    expect(screen.getByText('Here is your minimalist studio desk.')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Minimalist sunlit studio desk' })).toBeInTheDocument()
+  })
+
+  it('preserves legitimate user-requested JSON examples', () => {
+    const msg: Message = {
+      id: 'm5',
+      conversation_id: 'c1',
+      role: 'assistant',
+      content: '```json\n{"status":"ok","count":3}\n```',
+      created_at: new Date().toISOString(),
+    }
+
+    render(<AssistantMessage message={msg} />)
+    expect(screen.getByText(/"status":"ok"/)).toBeInTheDocument()
+  })
 })

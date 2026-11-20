@@ -28,6 +28,7 @@ type geminiStream struct {
 	apiKey        string
 	interactionID string
 	pendingCalls  map[int]*pendingToolCall
+	thoughtSteps  map[int]bool
 	emittedCalls  map[string]struct{}
 	queued        []ai.StreamChunk
 }
@@ -71,6 +72,7 @@ func (c *Client) StreamChat(ctx context.Context, req ai.ChatRequest) (ai.Stream,
 		closer:       resp.Body,
 		apiKey:       c.apiKey,
 		pendingCalls: make(map[int]*pendingToolCall),
+		thoughtSteps: make(map[int]bool),
 		emittedCalls: make(map[string]struct{}),
 	}, nil
 }
@@ -294,6 +296,13 @@ func (s *geminiStream) Recv() (ai.StreamChunk, error) {
 				eventType = currentEventName
 			}
 
+			// Track thought/reasoning steps so internal reasoning text is never emitted to users
+			if eventType == "step.start" && isThoughtStepType(evt.Step.Type) {
+				s.thoughtSteps[evt.Index] = true
+			} else if eventType == "content.start" && isThoughtStepType(evt.Content.Type) {
+				s.thoughtSteps[evt.Index] = true
+			}
+
 			// Handle step.start / content.start for streamed function calls
 			if eventType == "step.start" && evt.Step.Type == "function_call" && evt.Step.Name != "" {
 				callID := evt.Step.ID
@@ -336,9 +345,12 @@ func (s *geminiStream) Recv() (ai.StreamChunk, error) {
 			}
 
 			// Handle step.stop / content.stop / step.end / step.complete flushing a pending function call
-			if (eventType == "step.stop" || eventType == "content.stop" || eventType == "step.end" || eventType == "step.complete") && evt.PendingExists(s.pendingCalls) {
-				if flushErr := s.finalizePendingCall(evt.Index); flushErr != nil {
-					return ai.StreamChunk{}, flushErr
+			if eventType == "step.stop" || eventType == "content.stop" || eventType == "step.end" || eventType == "step.complete" {
+				delete(s.thoughtSteps, evt.Index)
+				if evt.PendingExists(s.pendingCalls) {
+					if flushErr := s.finalizePendingCall(evt.Index); flushErr != nil {
+						return ai.StreamChunk{}, flushErr
+					}
 				}
 			}
 
@@ -357,8 +369,8 @@ func (s *geminiStream) Recv() (ai.StreamChunk, error) {
 				}
 			}
 
-			// Handle text delta
-			if evt.Delta.Text != "" {
+			// Handle text delta (never emit thought/reasoning deltas)
+			if evt.Delta.Text != "" && !s.thoughtSteps[evt.Index] && isUserVisibleTextDelta(evt.Delta.Type) {
 				return ai.StreamChunk{
 					InteractionID: s.interactionID,
 					Delta:         evt.Delta.Text,
@@ -429,6 +441,23 @@ func (s *geminiStream) Recv() (ai.StreamChunk, error) {
 func (e interactionStreamEvent) PendingExists(m map[int]*pendingToolCall) bool {
 	_, ok := m[e.Index]
 	return ok
+}
+
+func isThoughtStepType(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "thought", "thought_summary", "thought_signature", "reasoning":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUserVisibleTextDelta(deltaType string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(deltaType))
+	if normalized == "" || normalized == "text" {
+		return true
+	}
+	return false
 }
 
 // Close closes the underlying HTTP response body.

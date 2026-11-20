@@ -172,7 +172,19 @@ func (s *ChatService) StreamMessageWithEvents(
 		chatReq.Tools = s.toolRegistry.Definitions()
 	}
 
-	turnResult, err := s.consumeProviderTurn(genCtx, chatReq, callbacks.OnDelta)
+	var streamedAnyText bool
+	emitDelta := func(delta string) error {
+		if delta == "" {
+			return nil
+		}
+		streamedAnyText = true
+		if callbacks.OnDelta != nil {
+			return callbacks.OnDelta(delta)
+		}
+		return nil
+	}
+
+	turnResult, err := s.consumeProviderTurn(genCtx, chatReq, emitDelta)
 	if err != nil {
 		return userMsg, domain.Message{}, err
 	}
@@ -182,8 +194,13 @@ func (s *ChatService) StreamMessageWithEvents(
 		newAttachments []domain.NewMessageAttachment
 		uploadedPaths  []string
 		emittedAtts    []domain.MessageAttachment
+		sawPseudoTool  bool
 	)
-	fullText.WriteString(turnResult.text)
+	turn1Clean, turn1HadPseudo := ai.SanitizeAssistantText(turnResult.text)
+	if turn1HadPseudo {
+		sawPseudoTool = true
+	}
+	fullText.WriteString(turn1Clean)
 
 	cleanupOrphans := func() {
 		if len(uploadedPaths) > 0 && s.storage != nil {
@@ -234,10 +251,8 @@ func (s *ChatService) StreamMessageWithEvents(
 				failureDelta = "\n\n" + userErrMsg
 			}
 			fullText.WriteString(failureDelta)
-			if callbacks.OnDelta != nil {
-				if deltaErr := callbacks.OnDelta(failureDelta); deltaErr != nil {
-					return userMsg, domain.Message{}, deltaErr
-				}
+			if deltaErr := emitDelta(failureDelta); deltaErr != nil {
+				return userMsg, domain.Message{}, deltaErr
 			}
 		} else {
 			if execResult.Attachment != nil {
@@ -285,37 +300,59 @@ func (s *ChatService) StreamMessageWithEvents(
 				followUpReq.ToolResults = nil
 			}
 
-			followUpTurn, followUpErr := s.consumeProviderTurn(genCtx, followUpReq, callbacks.OnDelta)
+			followUpTurn, followUpErr := s.consumeProviderTurn(genCtx, followUpReq, emitDelta)
 			if followUpErr != nil {
 				if errors.Is(followUpErr, context.Canceled) {
 					cleanupOrphans()
 					return userMsg, domain.Message{}, followUpErr
 				}
 				slog.Warn("follow-up turn after tool execution failed; using fallback caption", "error", followUpErr)
-			} else if strings.TrimSpace(followUpTurn.text) != "" {
-				if fullText.Len() > 0 {
-					fullText.WriteString("\n\n")
+			} else {
+				followUpClean, followUpHadPseudo := ai.SanitizeAssistantText(followUpTurn.text)
+				if followUpHadPseudo {
+					sawPseudoTool = true
 				}
-				fullText.WriteString(followUpTurn.text)
+				if strings.TrimSpace(followUpClean) != "" {
+					if fullText.Len() > 0 {
+						fullText.WriteString("\n\n")
+					}
+					fullText.WriteString(followUpClean)
+				}
 			}
 
 			if strings.TrimSpace(fullText.String()) == "" && len(newAttachments) > 0 {
 				fullText.WriteString(fallbackImageCaption)
-				if callbacks.OnDelta != nil {
-					if deltaErr := callbacks.OnDelta(fallbackImageCaption); deltaErr != nil {
-						cleanupOrphans()
-						return userMsg, domain.Message{}, deltaErr
-					}
+				if deltaErr := emitDelta(fallbackImageCaption); deltaErr != nil {
+					cleanupOrphans()
+					return userMsg, domain.Message{}, deltaErr
 				}
 			}
 		}
 	}
 
-	completedText := fullText.String()
+	completedText, finalHadPseudo := ai.SanitizeAssistantText(fullText.String())
+	if finalHadPseudo {
+		sawPseudoTool = true
+	}
 
 	// Guard against unsupported pseudo-tool JSON (e.g. dalle.text2im) emitted as plain text
-	if len(newAttachments) == 0 && ai.ContainsPseudoToolJSON(completedText) {
+	if len(newAttachments) == 0 && sawPseudoTool && strings.TrimSpace(completedText) == "" {
 		completedText = pseudoToolFallbackResponse
+		if !streamedAnyText {
+			if deltaErr := emitDelta(completedText); deltaErr != nil {
+				cleanupOrphans()
+				return userMsg, domain.Message{}, deltaErr
+			}
+		}
+	}
+	if len(newAttachments) > 0 && strings.TrimSpace(completedText) == "" {
+		completedText = fallbackImageCaption
+		if !streamedAnyText {
+			if deltaErr := emitDelta(completedText); deltaErr != nil {
+				cleanupOrphans()
+				return userMsg, domain.Message{}, deltaErr
+			}
+		}
 	}
 
 	if strings.TrimSpace(completedText) == "" {
@@ -393,6 +430,7 @@ func (s *ChatService) consumeProviderTurn(
 		fullResponse  strings.Builder
 		interactionID string
 		toolCalls     []ai.ToolCall
+		streamFilter  = newPseudoToolStreamFilter(onDelta)
 	)
 	for {
 		chunk, err := stream.Recv()
@@ -414,12 +452,14 @@ func (s *ChatService) consumeProviderTurn(
 		}
 		if chunk.Delta != "" {
 			fullResponse.WriteString(chunk.Delta)
-			if onDelta != nil {
-				if chunkErr := onDelta(chunk.Delta); chunkErr != nil {
-					return providerTurnResult{}, chunkErr
-				}
+			if chunkErr := streamFilter.Write(chunk.Delta); chunkErr != nil {
+				return providerTurnResult{}, chunkErr
 			}
 		}
+	}
+
+	if flushErr := streamFilter.Flush(); flushErr != nil {
+		return providerTurnResult{}, flushErr
 	}
 
 	return providerTurnResult{
@@ -427,6 +467,179 @@ func (s *ChatService) consumeProviderTurn(
 		text:          fullResponse.String(),
 		toolCalls:     toolCalls,
 	}, nil
+}
+
+const maxStreamFilterBufferBytes = 16 << 10 // 16 KiB safety cap
+
+// pseudoToolStreamFilter streams normal prose immediately while briefly buffering
+// potential JSON objects or fenced code blocks so internal pseudo-tool JSON
+// (e.g. dalle.text2im) is stripped before reaching SSE content_delta, while
+// legitimate JSON examples and code blocks are emitted intact.
+type pseudoToolStreamFilter struct {
+	onDelta func(delta string) error
+	buf     strings.Builder
+}
+
+func newPseudoToolStreamFilter(onDelta func(delta string) error) *pseudoToolStreamFilter {
+	return &pseudoToolStreamFilter{onDelta: onDelta}
+}
+
+func (f *pseudoToolStreamFilter) Write(delta string) error {
+	if f.onDelta == nil || delta == "" {
+		return nil
+	}
+	f.buf.WriteString(delta)
+	return f.drain(false)
+}
+
+func (f *pseudoToolStreamFilter) Flush() error {
+	if f.onDelta == nil || f.buf.Len() == 0 {
+		return nil
+	}
+	return f.drain(true)
+}
+
+func (f *pseudoToolStreamFilter) drain(eof bool) error {
+	s := f.buf.String()
+	if s == "" {
+		return nil
+	}
+
+	if eof || len(s) > maxStreamFilterBufferBytes {
+		cleaned, _ := ai.SanitizeAssistantText(s)
+		f.buf.Reset()
+		if cleaned != "" {
+			return f.onDelta(cleaned)
+		}
+		return nil
+	}
+
+	// Find earliest potential block starter ('{' or '`')
+	braceIdx := strings.IndexByte(s, '{')
+	tickIdx := strings.IndexByte(s, '`')
+
+	startIdx := -1
+	if braceIdx != -1 && (tickIdx == -1 || braceIdx < tickIdx) {
+		startIdx = braceIdx
+	} else if tickIdx != -1 {
+		startIdx = tickIdx
+	}
+
+	// No potential JSON/fence starter: stream entire buffer immediately
+	if startIdx == -1 {
+		f.buf.Reset()
+		return f.onDelta(s)
+	}
+
+	// Flush any clean prefix before the potential starter immediately
+	if startIdx > 0 {
+		prefix := s[:startIdx]
+		s = s[startIdx:]
+		f.buf.Reset()
+		f.buf.WriteString(s)
+		if err := f.onDelta(prefix); err != nil {
+			return err
+		}
+	}
+
+	// Check if a complete fenced block or balanced JSON object is now present
+	if strings.HasPrefix(s, "```") {
+		if nl := strings.IndexByte(s, '\n'); nl != -1 {
+			if closeRel := strings.Index(s[nl+1:], "```"); closeRel != -1 {
+				end := nl + 1 + closeRel + 3
+				segment := s[:end]
+				rest := s[end:]
+				f.buf.Reset()
+				f.buf.WriteString(rest)
+
+				cleaned, hadPseudo := ai.SanitizeAssistantText(segment)
+				if !hadPseudo {
+					if err := f.onDelta(segment); err != nil {
+						return err
+					}
+				} else if cleaned != "" {
+					if err := f.onDelta(cleaned); err != nil {
+						return err
+					}
+				}
+				return f.drain(false)
+			}
+		}
+		return nil
+	}
+
+	// Single or double backticks (inline code, not a triple fence): emit safely if we have >=3 chars or non-backtick
+	if s[0] == '`' {
+		if len(s) >= 3 || (len(s) == 2 && s[1] != '`') {
+			// Not a triple fence; emit the leading backtick and continue draining
+			f.buf.Reset()
+			f.buf.WriteString(s[1:])
+			if err := f.onDelta("`"); err != nil {
+				return err
+			}
+			return f.drain(false)
+		}
+		return nil
+	}
+
+	// Balanced JSON object starting with '{'
+	if s[0] == '{' {
+		if end, ok := findBalancedBracesEnd(s); ok {
+			segment := s[:end]
+			rest := s[end:]
+			f.buf.Reset()
+			f.buf.WriteString(rest)
+
+			cleaned, hadPseudo := ai.SanitizeAssistantText(segment)
+			if !hadPseudo {
+				if err := f.onDelta(segment); err != nil {
+					return err
+				}
+			} else if cleaned != "" {
+				if err := f.onDelta(cleaned); err != nil {
+					return err
+				}
+			}
+			return f.drain(false)
+		}
+	}
+
+	return nil
+}
+
+func findBalancedBracesEnd(s string) (int, bool) {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (s *ChatService) buildContextMessages(

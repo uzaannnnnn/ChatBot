@@ -515,6 +515,74 @@ func TestClient_StreamChat_FunctionResultRoundTripUnit(t *testing.T) {
 	}
 }
 
+func TestClient_StreamAndChat_FilterThoughtDeltas(t *testing.T) {
+	// Streaming: thought step text + thought delta must never be emitted to users
+	streamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: step.start\ndata: {\"index\":0,\"step\":{\"type\":\"thought\"},\"event_type\":\"step.start\"}\n\n"))
+		_, _ = w.Write([]byte("event: step.delta\ndata: {\"index\":0,\"delta\":{\"text\":\"Internal reasoning about dalle.text2im\",\"type\":\"thought\"},\"event_type\":\"step.delta\"}\n\n"))
+		_, _ = w.Write([]byte("event: step.stop\ndata: {\"index\":0,\"event_type\":\"step.stop\"}\n\n"))
+		_, _ = w.Write([]byte("event: step.start\ndata: {\"index\":1,\"step\":{\"type\":\"model_output\"},\"event_type\":\"step.start\"}\n\n"))
+		_, _ = w.Write([]byte("event: step.delta\ndata: {\"index\":1,\"delta\":{\"text\":\"Here is your desk image.\",\"type\":\"text\"},\"event_type\":\"step.delta\"}\n\n"))
+		_, _ = w.Write([]byte("event: step.stop\ndata: {\"index\":1,\"event_type\":\"step.stop\"}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer streamServer.Close()
+
+	client := NewClient(ClientOptions{BaseURL: streamServer.URL, APIKey: "test-key"})
+	stream, err := client.StreamChat(context.Background(), ai.ChatRequest{
+		Messages: []ai.Message{{Role: "user", Content: "Generate a desk"}},
+	})
+	if err != nil {
+		t.Fatalf("StreamChat error: %v", err)
+	}
+	defer stream.Close()
+
+	var streamed strings.Builder
+	for {
+		c, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Recv error: %v", err)
+		}
+		streamed.WriteString(c.Delta)
+	}
+	if streamed.String() != "Here is your desk image." {
+		t.Errorf("thought text leaked into stream: got %q", streamed.String())
+	}
+
+	// Non-streaming Chat(): thought parts must also be excluded
+	chatServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"inter_nonstream",
+			"model":"gemini-3.1-flash-lite",
+			"steps":[
+				{"type":"thought","text":"Secret thought"},
+				{"type":"model_output","content":[
+					{"type":"thought","text":"Hidden part thought"},
+					{"type":"text","text":"Visible answer."}
+				]}
+			]
+		}`))
+	}))
+	defer chatServer.Close()
+
+	chatClient := NewClient(ClientOptions{BaseURL: chatServer.URL, APIKey: "test-key"})
+	resp, err := chatClient.Chat(context.Background(), ai.ChatRequest{
+		Messages: []ai.Message{{Role: "user", Content: "Hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat error: %v", err)
+	}
+	if resp.Content != "Visible answer." {
+		t.Errorf("thought leaked into non-streaming Chat(): got %q", resp.Content)
+	}
+}
+
 func TestClient_StreamChat_LiveGeminiFunctionResultRoundTrip(t *testing.T) {
 	if os.Getenv("RUN_LIVE_GEMINI_ROUNDTRIP_TEST") != "1" {
 		t.Skip("skipping live Gemini round-trip test (set RUN_LIVE_GEMINI_ROUNDTRIP_TEST=1 to enable)")
